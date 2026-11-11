@@ -10,7 +10,9 @@ export function arabicFinding(finding) {
     case 'LINK_MISSING': return `الملف المشار إليه بالرابط المحلي غير موجود: ${d.link}`;
     case 'LINK_OUTSIDE_ROOT': return `الرابط المحلي ${d.resolved ? 'يُحل إلى مسار' : 'يشير إلى مسار'} خارج مجلد الفحص: ${d.link}`;
     case 'LINK_ENCODING': return 'يحتوي الرابط المحلي على ترميز مئوي غير صالح.';
-    case 'RUNTIME_UNDECLARED': return `يستخدم الأمر ${d.runtime}؛ اذكره في قسم المتطلبات.`;
+    case 'LINK_PLACEHOLDER': return 'الرابط مثال يحتوي على URL؛ لا يمكن فحصه كملف محلي.';
+    case 'LINK_DYNAMIC': return `الرابط المحلي يحتوي متغيرات لا يمكن حلها بالفحص الثابت: ${d.link}`;
+    case 'RUNTIME_UNDECLARED': return `يستخدم الأمر ${d.runtime}؛ لم تُرصد متطلباته في قسم المتطلبات المعروف للأداة، وقد تكون مذكورة في موضع آخر.`;
     case 'PORTABILITY_SHELL': return 'يفترض المثال بيئة أوامر POSIX؛ وضّح أنظمة التشغيل المدعومة أو وفّر بديلًا لنظام Windows.';
     case 'NO_SKILLS': return 'لم يُعثر على أي ملف SKILL.md داخل مجلد الفحص.';
     default: return finding.message;

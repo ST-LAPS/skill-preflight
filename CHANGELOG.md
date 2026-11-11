@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.1 — 2026-11-11
+
+- Fix false errors for indented multiline plain YAML descriptions.
+- Resolve `{baseDir}/` relative to the skill directory without bypassing scan boundaries.
+- Classify unresolved dynamic destinations and example URL placeholders as review warnings.
+- Avoid treating prompt prose or expected-output logs as POSIX command assumptions.
+- Clarify that unrecognized prerequisites and portability warnings are review hints, not confirmed upstream defects.
+- Add regressions motivated by a ten-repository static benchmark; retain all existing tests.
+
 ## 0.3.0 — 2026-11-11
 
 - Add a dependency-free Node.js 24 GitHub Action with English and Arabic job summaries.

@@ -6,7 +6,7 @@
 
 An early ST-LAPS developer tool for inspecting agent `SKILL.md` bundles. Finds missing local Markdown links, undeclared command runtimes, and common POSIX-shell assumptions. Static checks only: it never executes skill instructions or scripts, calls a model, or sends your files to a server.
 
-**Status: v0.3.0 experimental preview.** Reusable GitHub Action and local CLI with English and Arabic reports. No paid plans or subscriptions are active. Not published to npm.
+**Status: v0.3.1 experimental preview.** Reusable GitHub Action and local CLI with English and Arabic reports. No paid plans or subscriptions are active. Not published to npm.
 
 ## Quick start
 
@@ -42,11 +42,15 @@ On Windows use a quoted Windows path, for example `node cli.mjs "C:\work\my-skil
 | LINK_MISSING | Error | Inline local Markdown destination is missing |
 | LINK_OUTSIDE_ROOT | Warning | A local link escapes the scan directory |
 | LINK_ENCODING | Warning | Local destination has invalid percent encoding |
-| RUNTIME_UNDECLARED | Warning | A recognized command runtime is absent from Requirements |
+| LINK_PLACEHOLDER | Warning | An example URL placeholder cannot be checked as a file |
+| LINK_DYNAMIC | Warning | A variable-based link cannot be resolved statically |
+| RUNTIME_UNDECLARED | Warning | Prerequisites were not recognized in a Requirements section; they may be documented elsewhere |
 | PORTABILITY_SHELL | Warning | A shell example assumes POSIX conventions |
 | NO_SKILLS | Error | Nothing was found to scan |
 
 Declare prerequisites under `## Requirements`, `## Prerequisites`, `## Dependencies`, `## المتطلبات`, or `## متطلبات التشغيل`. Arabic headings with diacritics and Arabic filenames are supported. Name runtimes using their canonical names (for example `Python` or `Node.js`). Runtime detection covers common Node, Python, Bash, PowerShell and Git commands in shell code fences. Portability warnings are review prompts, including for intentionally Unix-only skills; they are not claims of confirmed Windows failures.
+
+`{baseDir}/...` links resolve relative to the directory containing `SKILL.md` and retain normal scan-boundary checks. Other variable-based destinations produce review warnings. Metadata accepts indented multiline plain descriptions as well as basic `|` and `>` blocks. Warnings are hypotheses for human review, not confirmed defects; do not use `--strict` as an upstream bug counter.
 
 Exit codes: **0** no errors, **1** errors (or warnings with `--strict`), **2** usage or filesystem failure. Output formats: `text`, `json`, `markdown`.
 
@@ -66,7 +70,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: ST-LAPS/skill-preflight@v0.3.0
+      - uses: ST-LAPS/skill-preflight@v0.3.1
         id: preflight
         with:
           path: ./skills

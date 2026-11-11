@@ -131,3 +131,32 @@ test('Arabic CLI help, errors, output files and exit codes', t => {
   assert.equal(result.status,1);
   assert.equal(JSON.parse(fs.readFileSync(output,'utf8')).language,'ar');
 });
+
+test('Indented YAML plain scalars are accepted without swallowing sibling fields', t => {
+  assert.equal(scan(fixture(t,'---\nname: demo\ndescription:\n  First line of the description\n  continuation text\nlicense: MIT\n---\n')).errors,0);
+  assert.equal(scan(fixture(t,'---\nname:\ndescription:\n  Nonempty description\n---\n')).errors,1);
+  assert.equal(scan(fixture(t,'---\nname: demo\ndescription: # comment only\n  # still empty\n---\n')).errors,1);
+  assert.equal(scan(fixture(t,'---\nname: demo\ndescription: NULL\n---\n')).errors,1);
+});
+
+test('baseDir links resolve from skill directory and still enforce boundaries', t => {
+  const root = fixture(t,header+'[guide]({baseDir}/references/guide.md)\n[missing]({baseDir}/missing.md)\n[escape]({baseDir}/../../outside.md)',{'references/guide.md':'ok'});
+  const r = scan(root);
+  assert.equal(r.errors,1); assert.equal(r.warnings,1);
+  assert.equal(r.findings[0].rule,'LINK_MISSING');
+  assert.equal(r.findings[1].rule,'LINK_OUTSIDE_ROOT');
+});
+
+test('Dynamic destinations and URL examples are review warnings, not missing files', t => {
+  const r = scan(fixture(t,header+'[example](URL)\n[guide](${ROOT}/guide.md)\n[other]({unknown}/guide.md)'));
+  assert.equal(r.errors,0); assert.equal(r.warnings,3);
+  assert.equal(r.findings[0].rule,'LINK_PLACEHOLDER');
+  assert.equal(r.findings[1].rule,'LINK_DYNAMIC');
+  assert.match(formatReport(r,'text','ar'),/الفحص الثابت/);
+});
+
+test('Prompt prose and expected-output logs do not become shell portability findings', t => {
+  const r = scan(fixture(t,header+'~~~\n- Always use the search tool, not bash grep.\n~~~\n\n```\nINFO: runner /tmp/work\n```'));
+  assert.equal(r.warnings,0);
+  assert.equal(scan(fixture(t,header+'```sh\npython3 /tmp/work.py\nexport OUT=/tmp/out\n```')).findings.filter(f=>f.rule==='PORTABILITY_SHELL').length,2);
+});

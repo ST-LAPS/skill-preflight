@@ -4,7 +4,7 @@ import { arabicFinding, validateLanguage } from './i18n.mjs';
 
 const ignored = new Set(['.git', 'node_modules', '.venv', 'vendor', 'coverage']);
 const inside = (root, file) => { const rel = path.relative(root, file); return rel === '' || (!rel.startsWith(`..${path.sep}`) && rel !== '..' && !path.isAbsolute(rel)); };
-const unixCommand = /(?:^|[;&|]\s*|\s)(?:sudo|chmod|bash|sh)\s|\b(?:export\s+[A-Za-z_]|\/bin\/(?:ba)?sh|\/tmp\/|\$HOME\b)/;
+const unixCommand = /^(?:\$\s*)?(?:(?:sudo|chmod|bash|sh)\s|export\s+[A-Za-z_]|\/bin\/(?:ba)?sh(?:\s|$))|^(?:\$\s*)?(?:python3?|node|npm|npx|uv|cd|rm|mkdir|cp|mv|cat|curl|wget|source)\s.*(?:\/tmp\/|\$HOME\b)/;
 const runtimeCommands = [
   ['node', /^(?:\$\s*)?(?:node|npm|npx|pnpm|yarn)\s/i],
   ['python', /^(?:\$\s*)?(?:python(?:3(?:\.\d+)?)?|pip3?|uv)\s/i],
@@ -38,9 +38,16 @@ export function checkSkill(file, root) {
   if (!front) add('META_FRONTMATTER', 'error', 1, 'Add YAML frontmatter with name and description.');
   else for (const key of ['name', 'description']) {
     const value = front[1].match(new RegExp(`^${key}:[ \\t]*(.*)$`, 'm'))?.[1]?.trim();
-    if (!value || /^(?:''|""|null|~)(?:\s*#.*)?$/.test(value)) add('META_REQUIRED', 'error', 1, `Frontmatter needs a non-empty ${key}.`, { key });
-    else if (/^[|>][-+]?\s*(?:#.*)?$/.test(value)) {
-      const block = front[1].match(new RegExp(`^${key}:.*\\n((?:[ \\t]+[^\\n]*\\n?)+)`, 'm'))?.[1]?.trim();
+    const metaLines = front[1].split('\n');
+    const fieldIndex = metaLines.findIndex(line => line.startsWith(`${key}:`));
+    const continuation = [];
+    for (let j = fieldIndex + 1; fieldIndex >= 0 && j < metaLines.length; j++) {
+      if (metaLines[j].trim() && !/^[ \t]/.test(metaLines[j])) break;
+      if (metaLines[j].trim() && !metaLines[j].trimStart().startsWith('#')) continuation.push(metaLines[j]);
+    }
+    const block = continuation.join('\n').trim();
+    if (value === undefined || (/^(?:''|""|null|~)(?:\s*#.*)?$/i.test(value))) add('META_REQUIRED', 'error', 1, `Frontmatter needs a non-empty ${key}.`, { key });
+    else if (!value || value.startsWith('#') || /^[|>][-+]?\s*(?:#.*)?$/.test(value)) {
       if (!block) add('META_REQUIRED', 'error', 1, `Frontmatter needs a non-empty ${key} block.`, { key, block: true });
     }
   }
@@ -74,6 +81,10 @@ export function checkSkill(file, root) {
       link = link.split(/[?#]/)[0];
       if (!link) continue;
       try { link = decodeURIComponent(link); } catch { add('LINK_ENCODING', 'warning', i+1, 'Local link has invalid percent encoding.'); continue; }
+      // {baseDir} denotes this skill's directory; do not treat it as a literal folder.
+      link = link.replace(/^\{baseDir\}[\\/]/, '');
+      if (link === 'URL' || link === '<URL>') { add('LINK_PLACEHOLDER', 'warning', i+1, 'Example URL placeholder cannot be checked as a local file.'); continue; }
+      if (/\{[^}]+\}|\$[A-Za-z_]|<[^>]+>/.test(link)) { add('LINK_DYNAMIC', 'warning', i+1, 'Dynamic local destination cannot be resolved statically.', { link }); continue; }
       const target = path.resolve(path.dirname(file), link);
       if (!inside(root, target)) { add('LINK_OUTSIDE_ROOT', 'warning', i+1, `Local link points outside the scan root: ${link}`, { link }); continue; }
       try {
@@ -92,7 +103,7 @@ export function checkSkill(file, root) {
       if (pattern.test(command.text) && !seen.has(runtime)) {
         seen.add(runtime);
         const declaration = runtime === 'node' ? /\b(?:node(?:\.js)?|npm|npx|pnpm|yarn)\b/i : new RegExp(`\\b${runtime}\\b`, 'i');
-        if (!declaration.test(requirements)) add('RUNTIME_UNDECLARED', 'warning', command.line, `Command uses ${runtime}; declare it in a Requirements section.`, { runtime });
+        if (!declaration.test(requirements)) add('RUNTIME_UNDECLARED', 'warning', command.line, `Command uses ${runtime}; prerequisites were not recognized in a Requirements section and may be documented elsewhere.`, { runtime });
       }
     }
     if (unixCommand.test(command.text)) add('PORTABILITY_SHELL', 'warning', command.line, 'POSIX shell assumption: document the supported OS or provide a Windows alternative.');
@@ -109,7 +120,7 @@ export function scan(input) {
   const files = stat.isDirectory() ? skillFiles(root) : [absolute];
   const findings = files.flatMap(file => checkSkill(file, root));
   if (!files.length) findings.push({ file: '.', line: 1, rule: 'NO_SKILLS', severity: 'error', message: 'No SKILL.md files found in this scan root.' });
-  return { version: '0.3.0', skills: files.length, errors: findings.filter(f=>f.severity==='error').length, warnings: findings.filter(f=>f.severity==='warning').length, findings };
+  return { version: '0.3.1', skills: files.length, errors: findings.filter(f=>f.severity==='error').length, warnings: findings.filter(f=>f.severity==='warning').length, findings };
 }
 
 export function formatReport(report, format = 'text', language = 'en') {
