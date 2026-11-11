@@ -1,0 +1,10 @@
+{
+  "name": "@st-laps/skill-preflight",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Static readiness checks for agent skill bundles. No skill execution or network calls.",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "bin": { "skill-preflight": "cli.mjs" },
+  "scripts": { "test": "node --test", "check": "node cli.mjs examples/ready" }
+}
