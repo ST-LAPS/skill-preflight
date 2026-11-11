@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { scan, formatReport } from './preflight.mjs';
+import { arabicFinding } from './i18n.mjs';
 
 const header = '---\nname: test-skill\ndescription: A test skill.\n---\n';
 function fixture(t, text, files = {}) {
@@ -36,6 +37,7 @@ test('outside-root link is a warning, never followed',t=>{
 test('frontmatter missing and empty fields fail',t=>{
   assert.equal(scan(fixture(t,'# No metadata')).findings[0].rule,'META_FRONTMATTER');
   const r=scan(fixture(t,'---\nname: ""\ndescription: null\n---\n')); assert.equal(r.errors,2);
+  assert.equal(scan(fixture(t,'---\nname:\ndescription: Nonempty\n---\n')).errors,1);
 });
 test('multiline YAML description recognized',t=>{
   const r=scan(fixture(t,'---\nname: demo\ndescription: |\n  First line\n  Second line\n---\n')); assert.equal(r.errors,0);
@@ -71,4 +73,61 @@ test('CLI exit codes and strict mode',t=>{
   assert.equal(spawnSync(process.execPath,[cli,root,'--strict']).status,1);
   assert.equal(spawnSync(process.execPath,[cli,root,'--format','xml']).status,2);
   assert.equal(spawnSync(process.execPath,[cli,root,'--bogus']).status,2);
+});
+
+test('Arabic requirement headings, diacritics and punctuation are recognized', t => {
+  for (const title of ['المتطلبات', 'متطلبات التشغيل', 'المتطلبات الأساسية:', 'المتطلبات الاساسية', 'الاعتماديات', 'التبعيات', 'المُتطلَّبات', 'المتطلبات — Requirements']) {
+    const root = fixture(t, header + `## ${title}\nNode.js 20\n\n` + '```sh\nnode --version\n```');
+    assert.equal(scan(root).warnings, 0, title);
+  }
+});
+
+test('Arabic requirements stop at sibling headings and do not match similar words', t => {
+  const r = scan(fixture(t, header + '## المتطلبات\nلا توجد\n## ملاحظات\nPython\n```sh\npython3 example.py\n```'));
+  assert.equal(r.findings[0].rule, 'RUNTIME_UNDECLARED');
+  const similar = scan(fixture(t, header + '## المتطلباتية\nPython\n```sh\npython3 example.py\n```'));
+  assert.equal(similar.findings[0].rule, 'RUNTIME_UNDECLARED');
+});
+
+test('Arabic content, filenames and encoded links work', t => {
+  const root = fixture(t, '---\nname: arabic-demo\ndescription: مهارة لكتابة التقارير\n---\n[دليل](دليل.md)\n[دليل مرمز](%D8%AF%D9%84%D9%8A%D9%84.md)\n', { 'دليل.md': 'تعليمات عربية' });
+  assert.equal(scan(root).errors, 0);
+});
+
+test('Arabic reports translate text, Markdown and JSON without changing codes', t => {
+  const report = scan(fixture(t, header + '[دليل](مفقود.md)\n```sh\npython3 a.py\n```'));
+  assert.match(formatReport(report, 'text', 'ar'), /فحص المهارات/);
+  assert.match(formatReport(report, 'markdown', 'ar'), /الملف:السطر/);
+  const ar = JSON.parse(formatReport(report, 'json', 'ar'));
+  const en = JSON.parse(formatReport(report, 'json', 'en'));
+  assert.equal(ar.language, 'ar');
+  assert.deepEqual(ar.findings.map(f=>[f.rule,f.severity,f.line]), en.findings.map(f=>[f.rule,f.severity,f.line]));
+  assert.match(ar.findings[0].message, /غير موجود: مفقود.md/);
+  assert.match(ar.findings[1].message, /python/);
+  assert.match(formatReport(report), /Skill Preflight/);
+  assert.throws(()=>formatReport(report, 'text', 'fr'), /Language/);
+});
+
+test('Every supported rule has an Arabic message and output is escaped', () => {
+  for (const rule of ['META_FRONTMATTER','META_REQUIRED','LINK_MISSING','LINK_OUTSIDE_ROOT','LINK_ENCODING','RUNTIME_UNDECLARED','PORTABILITY_SHELL','NO_SKILLS']) {
+    assert.match(arabicFinding({rule, message:'ENGLISH', details:{key:'name',link:'x',runtime:'node'}}), /[\u0600-\u06ff]/);
+  }
+  const text = formatReport({skills:1,errors:1,warnings:0,findings:[{rule:'LINK_MISSING',severity:'error',file:'a|b',line:1,details:{link:'<script>|x'}}]}, 'markdown', 'ar');
+  assert.ok(text.includes('&lt;script&gt;\\|x'));
+});
+
+test('Arabic CLI help, errors, output files and exit codes', t => {
+  const root = fixture(t, header + '[دليل](مفقود.md)');
+  const cli = path.resolve('cli.mjs');
+  const run = args => spawnSync(process.execPath, [cli, ...args], {encoding:'utf8'});
+  const help = run(['--help','--lang','ar']);
+  assert.equal(help.status,0); assert.match(help.stdout,/الاستخدام/);
+  const bad = run([root,'--lang','ar','--bogus']);
+  assert.equal(bad.status,2); assert.match(bad.stderr,/خيار غير معروف/);
+  assert.match(run([root,'--lang','ar','--format']).stderr,/إلى قيمة/);
+  assert.equal(run([root,'--lang','fr']).status,2);
+  const output = path.join(root,'تقرير.json');
+  const result = run([root,'--lang','ar','--format','json','--output',output]);
+  assert.equal(result.status,1);
+  assert.equal(JSON.parse(fs.readFileSync(output,'utf8')).language,'ar');
 });

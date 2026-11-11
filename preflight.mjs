@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { arabicFinding, validateLanguage } from './i18n.mjs';
 
 const ignored = new Set(['.git', 'node_modules', '.venv', 'vendor', 'coverage']);
 const inside = (root, file) => { const rel = path.relative(root, file); return rel === '' || (!rel.startsWith(`..${path.sep}`) && rel !== '..' && !path.isAbsolute(rel)); };
@@ -32,15 +33,15 @@ export function checkSkill(file, root) {
   const lines = source.split('\n');
   const relative = path.relative(root, file).split(path.sep).join('/');
   const findings = [];
-  const add = (rule, severity, line, message) => findings.push({ file: relative, line, rule, severity, message });
+  const add = (rule, severity, line, message, details = {}) => findings.push({ file: relative, line, rule, severity, message, details });
   const front = source.match(/^---\n([\s\S]*?)\n---(?:\n|$)/);
   if (!front) add('META_FRONTMATTER', 'error', 1, 'Add YAML frontmatter with name and description.');
   else for (const key of ['name', 'description']) {
-    const value = front[1].match(new RegExp(`^${key}:\\s*(.*)$`, 'm'))?.[1]?.trim();
-    if (!value || /^(?:''|""|null|~)(?:\s*#.*)?$/.test(value)) add('META_REQUIRED', 'error', 1, `Frontmatter needs a non-empty ${key}.`);
+    const value = front[1].match(new RegExp(`^${key}:[ \\t]*(.*)$`, 'm'))?.[1]?.trim();
+    if (!value || /^(?:''|""|null|~)(?:\s*#.*)?$/.test(value)) add('META_REQUIRED', 'error', 1, `Frontmatter needs a non-empty ${key}.`, { key });
     else if (/^[|>][-+]?\s*(?:#.*)?$/.test(value)) {
       const block = front[1].match(new RegExp(`^${key}:.*\\n((?:[ \\t]+[^\\n]*\\n?)+)`, 'm'))?.[1]?.trim();
-      if (!block) add('META_REQUIRED', 'error', 1, `Frontmatter needs a non-empty ${key} block.`);
+      if (!block) add('META_REQUIRED', 'error', 1, `Frontmatter needs a non-empty ${key} block.`, { key, block: true });
     }
   }
   let fence = null, frontEnd = front ? front[0].split('\n').length - 1 : 0;
@@ -61,7 +62,8 @@ export function checkSkill(file, root) {
     const heading = line.match(/^(#{1,6})\s+(.+?)\s*#*$/);
     if (heading) {
       if (collecting && heading[1].length <= headingDepth) collecting = false;
-      if (/^(?:requirements|prerequisites|dependencies|runtime requirements|متطلبات التشغيل|المتطلبات)\b/i.test(heading[2])) { collecting = true; headingDepth = heading[1].length; }
+      const title = heading[2].normalize('NFC').replace(/[\u064B-\u065F\u0670\u0640]/g, '').replace(/\s+/g, ' ').trim();
+      if (/^(?:requirements|prerequisites|dependencies|runtime requirements)(?=$|[\s:：])/i.test(title) || /^(?:المتطلبات|متطلبات التشغيل|المتطلبات الأساسية|المتطلبات الاساسية|الاعتماديات|التبعيات)(?=$|[\s:：])/.test(title)) { collecting = true; headingDepth = heading[1].length; }
     }
     if (collecting) requirements += `\n${line}`;
     // Inline local Markdown destinations; strip inline code first.
@@ -73,12 +75,12 @@ export function checkSkill(file, root) {
       if (!link) continue;
       try { link = decodeURIComponent(link); } catch { add('LINK_ENCODING', 'warning', i+1, 'Local link has invalid percent encoding.'); continue; }
       const target = path.resolve(path.dirname(file), link);
-      if (!inside(root, target)) { add('LINK_OUTSIDE_ROOT', 'warning', i+1, `Local link points outside the scan root: ${link}`); continue; }
+      if (!inside(root, target)) { add('LINK_OUTSIDE_ROOT', 'warning', i+1, `Local link points outside the scan root: ${link}`, { link }); continue; }
       try {
         const resolved = fs.realpathSync(target);
-        if (!inside(fs.realpathSync(root), resolved)) add('LINK_OUTSIDE_ROOT', 'warning', i+1, `Local link resolves outside the scan root: ${link}`);
+        if (!inside(fs.realpathSync(root), resolved)) add('LINK_OUTSIDE_ROOT', 'warning', i+1, `Local link resolves outside the scan root: ${link}`, { link, resolved: true });
       } catch (error) {
-        if (error.code === 'ENOENT' || error.code === 'ENOTDIR') add('LINK_MISSING', 'error', i+1, `Local link does not exist: ${link}`);
+        if (error.code === 'ENOENT' || error.code === 'ENOTDIR') add('LINK_MISSING', 'error', i+1, `Local link does not exist: ${link}`, { link });
         else throw error;
       }
     }
@@ -90,7 +92,7 @@ export function checkSkill(file, root) {
       if (pattern.test(command.text) && !seen.has(runtime)) {
         seen.add(runtime);
         const declaration = runtime === 'node' ? /\b(?:node(?:\.js)?|npm|npx|pnpm|yarn)\b/i : new RegExp(`\\b${runtime}\\b`, 'i');
-        if (!declaration.test(requirements)) add('RUNTIME_UNDECLARED', 'warning', command.line, `Command uses ${runtime}; declare it in a Requirements section.`);
+        if (!declaration.test(requirements)) add('RUNTIME_UNDECLARED', 'warning', command.line, `Command uses ${runtime}; declare it in a Requirements section.`, { runtime });
       }
     }
     if (unixCommand.test(command.text)) add('PORTABILITY_SHELL', 'warning', command.line, 'POSIX shell assumption: document the supported OS or provide a Windows alternative.');
@@ -107,15 +109,20 @@ export function scan(input) {
   const files = stat.isDirectory() ? skillFiles(root) : [absolute];
   const findings = files.flatMap(file => checkSkill(file, root));
   if (!files.length) findings.push({ file: '.', line: 1, rule: 'NO_SKILLS', severity: 'error', message: 'No SKILL.md files found in this scan root.' });
-  return { version: '0.1.0', skills: files.length, errors: findings.filter(f=>f.severity==='error').length, warnings: findings.filter(f=>f.severity==='warning').length, findings };
+  return { version: '0.2.0', skills: files.length, errors: findings.filter(f=>f.severity==='error').length, warnings: findings.filter(f=>f.severity==='warning').length, findings };
 }
 
-export function formatReport(report, format = 'text') {
-  if (format === 'json') return JSON.stringify(report, null, 2) + '\n';
-  const title = `Skill Preflight: ${report.skills} skill(s), ${report.errors} error(s), ${report.warnings} warning(s)`;
+export function formatReport(report, format = 'text', language = 'en') {
+  validateLanguage(language);
+  const ar = language === 'ar';
+  const findings = report.findings.map(f => ({ ...f, message: ar ? arabicFinding(f) : f.message }));
+  if (format === 'json') return JSON.stringify({ ...report, language, findings }, null, 2) + '\n';
+  const level = severity => ar ? (severity === 'error' ? 'خطأ' : 'تحذير') : severity;
+  const title = ar ? `فحص المهارات: ${report.skills} مهارة، ${report.errors} خطأ، ${report.warnings} تحذير` : `Skill Preflight: ${report.skills} skill(s), ${report.errors} error(s), ${report.warnings} warning(s)`;
   if (format === 'markdown') {
     const escape = s => String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('|','\\|').replaceAll('`','\\`').replace(/[\r\n]/g,' ');
-    return `## ${title}\n\n` + (report.findings.length ? '| File:line | Level | Rule | Finding |\n|---|---|---|---|\n' + report.findings.map(f=>`| ${escape(f.file)}:${f.line} | ${f.severity} | ${f.rule} | ${escape(f.message)} |`).join('\n') : 'No findings in the supported static checks.') + '\n';
+    const columns = ar ? '| الملف:السطر | المستوى | القاعدة | الملاحظة |' : '| File:line | Level | Rule | Finding |';
+    return `## ${title}\n\n` + (findings.length ? columns + '\n|---|---|---|---|\n' + findings.map(f=>`| ${escape(f.file)}:${f.line} | ${level(f.severity)} | ${f.rule} | ${escape(f.message)} |`).join('\n') : (ar ? 'لم تُرصد ملاحظات ضمن الفحوص الثابتة المدعومة.' : 'No findings in the supported static checks.')) + '\n';
   }
-  return title + '\n' + report.findings.map(f=>`${f.file}:${f.line} ${f.severity} ${f.rule} ${f.message}`).join('\n') + '\n';
+  return title + '\n' + findings.map(f=>`${f.file}:${f.line} ${level(f.severity)} ${f.rule} ${f.message}`).join('\n') + '\n';
 }
