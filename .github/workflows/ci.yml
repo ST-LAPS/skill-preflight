@@ -7,10 +7,11 @@ permissions:
   contents: read
 jobs:
   test:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        node: [20, 22]
+        os: [ubuntu-24.04, windows-latest]
+        node: [20, 22, 24]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -19,3 +20,4 @@ jobs:
           package-manager-cache: false
       - run: node --test
       - run: node cli.mjs examples/ready --strict
+      - run: node cli.mjs examples/ready --strict --lang ar --format markdown
