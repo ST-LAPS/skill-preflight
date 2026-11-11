@@ -1,6 +1,6 @@
 {
   "name": "@st-laps/skill-preflight",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "license": "MIT",
   "private": true,
   "description": "Static readiness checks for agent skill bundles. No skill execution or network calls.",

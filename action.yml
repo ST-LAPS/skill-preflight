@@ -1,0 +1,29 @@
+name: ST-LAPS Skill Preflight
+description: Check agent skill bundles for missing files, undeclared runtimes and portability risks. English and Arabic reports.
+author: ST-LAPS
+branding:
+  icon: check-circle
+  color: blue
+inputs:
+  path:
+    description: Skill directory or SKILL.md path within the checked-out workspace.
+    required: false
+    default: '.'
+  language:
+    description: Report language, en or ar.
+    required: false
+    default: en
+  strict:
+    description: Fail on warnings as well as errors, true or false.
+    required: false
+    default: 'false'
+outputs:
+  skills:
+    description: Number of SKILL.md files scanned.
+  errors:
+    description: Number of errors found.
+  warnings:
+    description: Number of warnings found.
+runs:
+  using: node24
+  main: action.mjs

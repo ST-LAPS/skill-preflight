@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.0 — 2026-11-11
+
+- Add a dependency-free Node.js 24 GitHub Action with English and Arabic job summaries.
+- Accept path, language and strict inputs; export numeric skills, errors and warnings counts.
+- Constrain action scan paths to the checked-out workspace; treat inputs as data and suspend workflow command parsing during log output.
+- Add action integration tests and workflow usage documentation.
+- Preserve the standalone CLI. No billing, telemetry or GitHub App added.
+
 ## 0.2.0 — 2026-11-11
 
 Experimental preview, not a production guarantee.

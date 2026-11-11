@@ -20,6 +20,9 @@ export function arabicFinding(finding) {
 export function cliMessage(message, language) {
   if (language !== 'ar') return message;
   const messages = {
+    'Input strict must be true or false.': 'يجب أن تكون قيمة strict إما true أو false.',
+    'GITHUB_WORKSPACE is required.': 'متغير GITHUB_WORKSPACE مطلوب لتشغيل الإجراء.',
+    'Scan path must stay inside GITHUB_WORKSPACE.': 'يجب أن يبقى مسار الفحص داخل مجلد GITHUB_WORKSPACE.',
     'Language must be en or ar.': 'يجب أن تكون اللغة en أو ar.',
     'Format must be text, json, or markdown.': 'يجب أن تكون صيغة التقرير text أو json أو markdown.',
     'Only one scan path is accepted.': 'يمكن تحديد مسار فحص واحد فقط.',

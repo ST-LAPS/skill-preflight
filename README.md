@@ -6,7 +6,7 @@
 
 An early ST-LAPS developer tool for inspecting agent `SKILL.md` bundles. Finds missing local Markdown links, undeclared command runtimes, and common POSIX-shell assumptions. Static checks only: it never executes skill instructions or scripts, calls a model, or sends your files to a server.
 
-**Status: v0.2.0 experimental preview.** English and Arabic reports. Not published to npm or GitHub Marketplace. No paid plans or subscriptions are active.
+**Status: v0.3.0 experimental preview.** Reusable GitHub Action and local CLI with English and Arabic reports. No paid plans or subscriptions are active. Not published to npm.
 
 ## Quick start
 
@@ -54,7 +54,7 @@ Use `--lang en` (default) or `--lang ar` for report messages, help and CLI valid
 
 ## GitHub Actions
 
-Copy this workflow to your own repository and replace `./skills` with your skill directory. Pin external actions and this repository to reviewed commit SHAs for production use.
+Copy this workflow to your own repository and replace `./skills` with your skill directory. Pin actions to reviewed commit SHAs for production use.
 
 ```yaml
 name: Skill readiness
@@ -66,18 +66,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: ST-LAPS/skill-preflight@v0.3.0
+        id: preflight
         with:
-          node-version: 22
-          package-manager-cache: false
-      # Put reviewed copies of cli.mjs, preflight.mjs and i18n.mjs in tools/preflight/.
-      - run: node tools/preflight/cli.mjs ./skills --format markdown --output preflight-report.md
-      - if: always()
-        shell: bash
-        run: cat preflight-report.md >> "$GITHUB_STEP_SUMMARY"
+          path: ./skills
+          language: en # or ar
+          strict: 'false'
 ```
 
-This is a CLI with an Actions recipe, not a published reusable GitHub Action or installed GitHub App. Checks can be run locally without consuming GitHub Actions minutes.
+No separate Node.js setup or API token is needed for the action. It uses the runner's Node.js 24 action runtime; use current GitHub-hosted runners or an updated self-hosted runner with Node.js 24 action support. Your repository must be checked out first. Scan paths must remain inside `GITHUB_WORKSPACE`. A Markdown report is appended to the job summary, and numeric `skills`, `errors`, and `warnings` outputs are available on the step, including when findings fail the step. Invalid inputs or I/O failures use exit code 2 and do not produce scan counts. `strict: 'true'` fails on warnings. The action does not request write permissions, use API tokens, open comments, or send telemetry. This is not an installed GitHub App or billing service. Local CLI checks do not consume GitHub Actions minutes.
 
 ## Limits
 

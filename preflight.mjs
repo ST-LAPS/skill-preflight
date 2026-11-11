@@ -109,7 +109,7 @@ export function scan(input) {
   const files = stat.isDirectory() ? skillFiles(root) : [absolute];
   const findings = files.flatMap(file => checkSkill(file, root));
   if (!files.length) findings.push({ file: '.', line: 1, rule: 'NO_SKILLS', severity: 'error', message: 'No SKILL.md files found in this scan root.' });
-  return { version: '0.2.0', skills: files.length, errors: findings.filter(f=>f.severity==='error').length, warnings: findings.filter(f=>f.severity==='warning').length, findings };
+  return { version: '0.3.0', skills: files.length, errors: findings.filter(f=>f.severity==='error').length, warnings: findings.filter(f=>f.severity==='warning').length, findings };
 }
 
 export function formatReport(report, format = 'text', language = 'en') {
