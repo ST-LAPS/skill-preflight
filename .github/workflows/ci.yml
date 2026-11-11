@@ -21,3 +21,28 @@ jobs:
       - run: node --test
       - run: node cli.mjs examples/ready --strict
       - run: node cli.mjs examples/ready --strict --lang ar --format markdown
+      - name: Use local action with Arabic summary
+        id: ready
+        uses: ./
+        with:
+          path: examples/ready
+          language: ar
+          strict: 'true'
+      - name: Verify intentional failure through action
+        id: broken
+        continue-on-error: true
+        uses: ./
+        with:
+          path: examples/broken
+      - name: Assert action outputs and expected failure
+        shell: bash
+        env:
+          READY_ERRORS: ${{ steps.ready.outputs.errors }}
+          BROKEN_ERRORS: ${{ steps.broken.outputs.errors }}
+          BROKEN_WARNINGS: ${{ steps.broken.outputs.warnings }}
+          BROKEN_OUTCOME: ${{ steps.broken.outcome }}
+        run: |
+          test "$READY_ERRORS" = "0"
+          test "$BROKEN_ERRORS" = "1"
+          test "$BROKEN_WARNINGS" = "2"
+          test "$BROKEN_OUTCOME" = "failure"
