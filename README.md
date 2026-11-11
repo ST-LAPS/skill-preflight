@@ -84,9 +84,11 @@ No separate Node.js setup or API token is needed for the action. It uses the run
 
 The scanner recognizes a small frontmatter subset and inline Markdown links, not all YAML or CommonMark syntax. It does not validate reference-style links, Markdown anchors, remote URLs, shell syntax, dependencies at runtime, prompt quality, or behavior under a model. A clean report is not a security audit or compatibility guarantee. It does not promise cost savings. Do not run untrusted skill scripts as part of manual review.
 
-## Product direction
+## Try it on your skills
 
-Local checks are the first experiment. Possible future team features include private-repository history, shared policies and change reports. Pricing is unvalidated and billing is not implemented. We will measure useful findings, false positives, repeat usage and actual demand before building paid infrastructure.
+If you maintain a skill repository, run Skill Preflight on it using the CLI or GitHub Action above. Tell us what helped you make a change, where setup got stuck, or which warning needed more context. If you run it again after your next real skill change, add the result to the same report. The report is public, so share only a non-sensitive summary.
+
+[Share pilot feedback](https://github.com/ST-LAPS/skill-preflight/issues/new?template=pilot-feedback.md) · [Product roadmap](ROADMAP.md)
 
 ## العربية
 
