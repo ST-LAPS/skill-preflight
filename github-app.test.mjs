@@ -7,16 +7,18 @@ import { createProcessor, createWebhookServer } from './github-app.mjs';
 const sha = 'a'.repeat(40);
 const treeSha = 'b'.repeat(40);
 const skillSha = 'c'.repeat(40);
+const baseSha = 'd'.repeat(40);
 const payload = {
   action: 'opened',
   installation: { id: 42 },
   repository: { id: 7, full_name: 'ST-LAPS/example' },
-  pull_request: { draft: false, head: { sha, repo: { id: 7 } } },
+  pull_request: { draft: false, base: { sha: baseSha }, head: { sha, repo: { id: 7 } } },
 };
 const privateKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey;
 const skill = Buffer.from('---\nname: example\ndescription: A test skill.\n---\n[Valid](present.md)\n[Broken](missing.md)\n');
+const job = { installationId: 42, repositoryId: 7, repo: 'ST-LAPS/example', sha, baseSha };
 
-function githubMock({ treeOverride, existing = [] } = {}) {
+function githubMock({ treeOverride, existing = [], comparison = [], skillContents = skill } = {}) {
   const writes = [];
   const fetchImpl = async (input, { method, headers, body }) => {
     const url = new URL(input);
@@ -44,7 +46,10 @@ function githubMock({ treeOverride, existing = [] } = {}) {
       ] });
     }
     if (url.pathname.endsWith('/git/blobs/' + skillSha)) {
-      return Response.json({ encoding: 'base64', content: skill.toString('base64') });
+      return Response.json({ encoding: 'base64', content: skillContents.toString('base64') });
+    }
+    if (url.pathname.endsWith('/compare/' + baseSha + '...' + sha)) {
+      return Response.json({ files: comparison });
     }
     if (url.pathname.endsWith('/check-runs') && method === 'POST') {
       writes.push(JSON.parse(body));
@@ -95,15 +100,55 @@ test('an unsafe Git path results in a neutral check', async () => {
     tree: [{ path: '../outside', type: 'blob', mode: '100644' }],
   } });
   const processor = createProcessor({ appId: '100', privateKey, fetchImpl, log: () => {} });
-  await processor({ installationId: 42, repositoryId: 7, repo: 'ST-LAPS/example', sha });
+  await processor(job);
   assert.equal(writes[0].conclusion, 'neutral');
 });
 
 test('redelivery does not duplicate a completed check', async () => {
   const { fetchImpl, writes } = githubMock({ existing: [{
-    id: 10, status: 'completed', conclusion: 'failure', external_id: 'skill-preflight:7:' + sha,
+    id: 10, status: 'completed', conclusion: 'failure', external_id: 'skill-preflight:7:' + baseSha + ':' + sha,
   }] });
   const processor = createProcessor({ appId: '100', privateKey, fetchImpl, log: () => {} });
-  await processor({ installationId: 42, repositoryId: 7, repo: 'ST-LAPS/example', sha });
+  await processor(job);
   assert.deepEqual(writes, []);
+});
+
+test('links in an unchanged Arabic skill show the effect of a file rename and the proposed fix', async () => {
+  const filename = 'skills/مهارة/SKILL.md';
+  const movedFrom = 'docs/setup.md';
+  const movedTo = 'docs/install (v2).md';
+  const skillWithLink = destination => Buffer.from(
+    '---\nname: arabic-skill\ndescription: مهارة عربية للاختبار\n---\n[دليل الإعداد](' + destination + ')\n');
+  const comparison = [{ status: 'renamed', filename: movedTo, previous_filename: movedFrom }];
+  async function check(skillContents, files = comparison) {
+    const { fetchImpl, writes } = githubMock({
+      comparison: files,
+      skillContents,
+      treeOverride: { truncated: false, tree: [
+        { path: filename, type: 'blob', mode: '100644', size: skillContents.length, sha: skillSha },
+        { path: movedTo, type: 'blob', mode: '100644', size: 12 },
+      ] },
+    });
+    const processor = createProcessor({ appId: '100', privateKey, fetchImpl, log: () => {} });
+    await processor(job);
+    return writes[0];
+  }
+  const original = skillWithLink('../../docs/setup.md');
+  const broken = await check(original);
+  assert.equal(broken.conclusion, 'failure');
+  assert.match(broken.output.summary, /1 link\(s\) across 1 unchanged skill/);
+  assert.deepEqual(broken.output.annotations, [{
+    path: filename,
+    start_line: 5,
+    end_line: 5,
+    annotation_level: 'failure',
+    title: 'File rename broke a skill link',
+    message: 'docs/setup.md was renamed to docs/install (v2).md. Suggested link destination: ../../docs/install%20%28v2%29.md',
+  }]);
+  const unrelated = await check(original, [...comparison, { status: 'modified', filename }]);
+  assert.equal(unrelated.conclusion, 'failure');
+  assert.deepEqual(unrelated.output.annotations, []);
+  const fixed = await check(skillWithLink('../../docs/install%20%28v2%29.md'));
+  assert.equal(fixed.conclusion, 'success');
+  assert.deepEqual(fixed.output.annotations, []);
 });

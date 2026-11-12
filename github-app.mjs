@@ -16,6 +16,8 @@ const maxSkillBytes = 1024 * 1024;
 const maxTotalSkillBytes = 16 * maxSkillBytes;
 const maxWebhookBytes = 1024 * 1024;
 const maxPendingJobs = 20;
+const compareFileLimit = 300;
+const annotationLimit = 50;
 
 export function verifySignature(secret, body, signature) {
   if (typeof signature !== 'string' || !/^sha256=[a-f0-9]{64}$/.test(signature)) return false;
@@ -24,14 +26,17 @@ export function verifySignature(secret, body, signature) {
 }
 
 export function pullRequestJob(event, payload) {
-  if (event !== 'pull_request' || !activeActions.has(payload?.action)) return null;
+  if (event !== 'pull_request' || (!activeActions.has(payload?.action) &&
+      !(payload?.action === 'edited' && payload.changes?.base))) return null;
   const { installation, repository, pull_request: pr } = payload;
   const repo = repository?.full_name;
   if (!validId(installation?.id) || !validId(repository?.id) ||
       !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo ?? '') ||
-      !shaPattern.test(pr?.head?.sha ?? '') || pr?.head?.repo?.id !== repository.id ||
+      !shaPattern.test(pr?.head?.sha ?? '') || !shaPattern.test(pr?.base?.sha ?? '') ||
+      pr?.head?.repo?.id !== repository.id ||
       pr.draft !== false) return null;
-  return { installationId: installation.id, repositoryId: repository.id, repo, sha: pr.head.sha };
+  return { installationId: installation.id, repositoryId: repository.id, repo,
+    sha: pr.head.sha, baseSha: pr.base.sha };
 }
 
 function createJwt(appId, privateKey, now = Math.floor(Date.now() / 1000)) {
@@ -112,15 +117,47 @@ async function scanCommit(api, repoRoute, sha, token) {
   }
 }
 
+function renameImpact(report, files) {
+  if (!Array.isArray(files) || files.length >= compareFileLimit) return [];
+  const changedPaths = new Set();
+  const renamedPaths = new Map();
+  for (const file of files) {
+    changedPaths.add(file.filename);
+    if (file.previous_filename) changedPaths.add(file.previous_filename);
+    if (file.status === 'renamed' && file.previous_filename && file.filename) {
+      renamedPaths.set(file.previous_filename, file.filename);
+    }
+  }
+  return report.findings.flatMap(finding => {
+    if (finding.rule !== 'LINK_MISSING' || changedPaths.has(finding.file)) return [];
+    const skillDir = path.posix.dirname(finding.file);
+    const link = finding.details.link.split(path.sep).join('/');
+    const oldPath = path.posix.resolve('/', skillDir, link).slice(1);
+    const newPath = renamedPaths.get(oldPath);
+    if (!newPath) return [];
+    const suggestedPath = path.posix.relative(skillDir, newPath).split('/').map(segment =>
+      encodeURIComponent(segment).replace(/[!'()*]/g, char =>
+        '%' + char.charCodeAt(0).toString(16).toUpperCase())).join('/');
+    return [{
+      path: finding.file,
+      start_line: finding.line,
+      end_line: finding.line,
+      annotation_level: 'failure',
+      title: 'File rename broke a skill link',
+      message: `${oldPath} was renamed to ${newPath}. Suggested link destination: ${suggestedPath}`,
+    }];
+  });
+}
+
 export function createProcessor({ appId, privateKey, fetchImpl, log = console.error }) {
   const api = githubClient(fetchImpl);
-  return async ({ installationId, repositoryId, repo, sha }) => {
+  return async ({ installationId, repositoryId, repo, sha, baseSha }) => {
     const repoRoute = '/repos/' + repo.split('/').map(encodeURIComponent).join('/');
     const { token } = await api('/app/installations/' + installationId + '/access_tokens',
       createJwt(appId, privateKey), { method: 'POST', body: { repository_ids: [repositoryId] } });
     if (typeof token !== 'string' || !token) throw new Error('Missing installation token');
     const checks = repoRoute + '/check-runs';
-    const externalId = 'skill-preflight:' + repositoryId + ':' + sha;
+    const externalId = 'skill-preflight:' + repositoryId + ':' + baseSha + ':' + sha;
     const prior = await api(repoRoute + '/commits/' + sha + '/check-runs?check_name=' +
       encodeURIComponent(checkName) + '&app_id=' + encodeURIComponent(appId) + '&filter=all', token);
     const existing = prior.check_runs?.find(run => run.external_id === externalId);
@@ -129,10 +166,25 @@ export function createProcessor({ appId, privateKey, fetchImpl, log = console.er
     try {
       const report = await scanCommit(api, repoRoute, sha, token);
       const markdown = formatReport(report, 'markdown', 'en');
-      const summary = markdown.length > 20000 ? markdown.slice(0, 20000) + '\n\nReport truncated.' : markdown;
+      let summary = markdown.length > 20000 ? markdown.slice(0, 20000) + '\n\nReport truncated.' : markdown;
+      let annotations = [];
+      if (report.findings.some(finding => finding.rule === 'LINK_MISSING')) {
+        try {
+          const comparison = await api(repoRoute + '/compare/' + baseSha + '...' + sha + '?per_page=1', token);
+          const impact = renameImpact(report, comparison.files);
+          if (impact.length) {
+            const count = new Set(impact.map(annotation => annotation.path)).size;
+            annotations = impact.slice(0, annotationLimit);
+            summary = `File renames broke ${impact.length} link(s) across ${count} unchanged skill(s). ` +
+              `Showing ${annotations.length} location(s) with suggested destinations.\n\n` + summary;
+          }
+        } catch (error) {
+          log('Skill Preflight could not compare the PR commits:', error.message);
+        }
+      }
       result = {
         conclusion: report.errors ? 'failure' : 'success',
-        output: { title: report.errors ? 'Skill errors found' : 'Skill check passed', summary },
+        output: { title: report.errors ? 'Skill errors found' : 'Skill check passed', summary, annotations },
       };
     } catch (error) {
       log('Skill Preflight scan could not complete:', error.message);
@@ -180,7 +232,7 @@ export function createWebhookServer({ secret, processJob, log = console.error })
       catch { response.writeHead(400).end(); return; }
       const job = pullRequestJob(request.headers['x-github-event'], payload);
       if (!job) { response.writeHead(204).end(); return; }
-      const key = job.installationId + ':' + job.repositoryId + ':' + job.sha;
+      const key = job.installationId + ':' + job.repositoryId + ':' + job.baseSha + ':' + job.sha;
       if (pending.has(key)) { response.writeHead(202).end(); return; }
       if (pending.size >= maxPendingJobs) { response.writeHead(503).end(); return; }
       pending.add(key);

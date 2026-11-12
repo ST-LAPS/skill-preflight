@@ -2,13 +2,15 @@
 
 This private development app reports static checks on non-draft pull requests whose head branch is in the same repository. It reads each commit by SHA, downloads only `SKILL.md` contents, and uses Git tree metadata to check whether other tracked files exist. The app never executes skill code. It deletes the temporary snapshot after each scan.
 
+When GitHub identifies a file rename in the pull request comparison, the app checks whether that rename broke a local link in an unchanged skill. The check names the old and new file, points to the affected line, and suggests a Markdown-compatible relative path. The summary reports how many links and skills were affected, and the check includes up to 50 annotations. If the comparison is unavailable or reaches GitHub's 300-file limit, the normal scan still reports missing links.
+
 ## Run the local tests
 
 ```sh
 node --test github-app.test.mjs
 ```
 
-The tests use a local HTTP server and simulated GitHub API responses. They check webhook signatures, installation token requests, failure reporting, unsafe paths, and repeated deliveries.
+The tests use a local HTTP server and simulated GitHub API responses. They cover webhook signatures, installation token requests, failure reporting, unsafe paths, repeated deliveries, and a rename that breaks a link in an unchanged Arabic skill. The same example passes after the suggested destination replaces the old one.
 
 ## Set up a private installation
 
