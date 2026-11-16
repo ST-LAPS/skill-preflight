@@ -18,7 +18,10 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
           package-manager-cache: false
+      - run: node --test action.test.mjs preflight.test.mjs
+        if: matrix.node == 20
       - run: node --test
+        if: matrix.node != 20
       - run: node cli.mjs examples/ready --strict
       - run: node cli.mjs examples/ready --strict --lang ar --format markdown
       - name: Use local action with Arabic summary
