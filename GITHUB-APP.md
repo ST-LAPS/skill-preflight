@@ -14,11 +14,17 @@ The tests use a local HTTP server and simulated GitHub API responses. They cover
 
 ## Set up a private installation
 
-1. Provision a Node.js 22 or later host with an HTTPS endpoint routed to `/github/webhook`. Keep the app private during this test.
+1. Provision a Node.js 22.13 or later host with an HTTPS endpoint routed to `/github/webhook`. Keep the app private during this test.
 2. Configure repository permissions for Contents (read), Pull requests (read), and Checks (read and write). Subscribe to Pull request events. GitHub grants Metadata read access automatically.
-3. Generate the private key in GitHub and a separate random webhook secret. Store both in the host's secret manager. Set `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY` (PEM text), and `GITHUB_WEBHOOK_SECRET` on the host. Start the process with `node github-app.mjs`. It listens on `127.0.0.1:3000` by default. Set `HOST` and `PORT` if required by the host.
+3. Generate the private key in GitHub and a separate random webhook secret. Store both in the host's secret manager. Set `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY` (PEM text), and `GITHUB_WEBHOOK_SECRET` on the host. Set `WEBHOOK_QUEUE_DB` to an absolute path in an existing, private, writable directory on a persistent local volume. Start the process with `node github-app.mjs`. It listens on `127.0.0.1:3000` by default. Set `HOST` and `PORT` if required by the host.
 4. Set the GitHub App webhook URL to the HTTPS endpoint and configure the same webhook secret. Install the app only on the ST-LAPS example repository. Use a branch in that repository to test a pull request with a valid skill, then push a commit containing a missing link. Verify the named check succeeds on the first commit and fails on the second.
 
-The development server uses a bounded queue in memory. A restart can lose accepted jobs, so review the logs and redeliver the webhook from GitHub if needed. Fork pull requests are skipped. Snapshots containing symlinks, submodules, or unsupported paths receive a neutral result. Large snapshots also receive a neutral result (limits of 10,000 entries, 300 skills, 1 MiB per skill and 16 MiB total skill content).
+## Delivery recovery
 
-Public release still needs live installation testing, persistent delivery handling, an operational privacy and support setup, and GitHub Marketplace billing integration. The development app does not process purchases.
+Run one worker with the database and its `.worker` lock file on the same local volume. Keep the database at the same path when restarting or deploying; the volume must support SQLite file locks. The server acknowledges a delivery after saving it and resumes accepted jobs at startup. Failed jobs retry after 30 seconds. Completed delivery IDs are retained for seven days. If the worker stops after posting a GitHub check but before recording completion, it looks up the existing check before publishing again.
+
+If the queue reaches 20 pending jobs or a write fails, the webhook returns HTTP 503. Check the service logs, resolve the storage or processing issue, and redeliver the rejected event from GitHub.
+
+Fork pull requests are skipped. Snapshots containing symlinks, submodules, or unsupported paths receive a neutral result. Large snapshots also receive a neutral result (limits of 10,000 entries, 300 skills, 1 MiB per skill and 16 MiB total skill content).
+
+Public release still needs live installation testing, an operational privacy and support setup, and GitHub Marketplace billing integration. The development app does not process purchases.
