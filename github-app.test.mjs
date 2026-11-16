@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
+import { fork } from 'node:child_process';
 import { createHmac, generateKeyPairSync, verify } from 'node:crypto';
 import { once } from 'node:events';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { test } from 'node:test';
 import { createProcessor, createWebhookServer } from './github-app.mjs';
 
@@ -17,6 +21,100 @@ const payload = {
 const privateKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey;
 const skill = Buffer.from('---\nname: example\ndescription: A test skill.\n---\n[Valid](present.md)\n[Broken](missing.md)\n');
 const job = { installationId: 42, repositoryId: 7, repo: 'ST-LAPS/example', sha, baseSha };
+
+test('accepted work resumes after a worker is killed and redelivery stays deduplicated',
+  { timeout: 15000 }, async t => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'preflight-queue-test-'));
+    const databasePath = path.join(dir, 'deliveries.sqlite');
+    const script = path.join(dir, 'worker.mjs');
+    const moduleUrl = new URL('./github-app.mjs', import.meta.url).href;
+    const secret = 'local-test-secret';
+    const secondSha = 'e'.repeat(40);
+    const queuedPayload = structuredClone(payload);
+    queuedPayload.pull_request.head.sha = secondSha;
+    const processed = [];
+    let child;
+    let server;
+    t.after(async () => {
+      if (child && child.exitCode === null && child.signalCode === null) {
+        const exit = once(child, 'exit');
+        child.kill();
+        await exit;
+      }
+      if (server?.listening) await new Promise(resolve => server.close(resolve));
+      await rm(dir, { recursive: true, force: true });
+    });
+
+    await writeFile(script, `
+      import { createWebhookServer } from ${JSON.stringify(moduleUrl)};
+      const server = createWebhookServer({
+        secret: ${JSON.stringify(secret)},
+        databasePath: process.argv[2],
+        processJob(job) {
+          process.send(job.sha);
+          return new Promise(() => {});
+        },
+      });
+      server.listen(0, '127.0.0.1', () => process.send(server.address().port));
+    `);
+
+    const send = async (port, id, data) => {
+      const body = JSON.stringify(data);
+      const signature = createHmac('sha256', secret).update(body).digest('hex');
+      const response = await fetch(`http://127.0.0.1:${port}/github/webhook`, {
+        method: 'POST', body, headers: {
+          'X-GitHub-Delivery': id,
+          'X-GitHub-Event': 'pull_request',
+          'X-Hub-Signature-256': `sha256=${signature}`,
+        },
+      });
+      return response.status;
+    };
+
+    child = fork(script, [databasePath], { execArgv: [] });
+    const [beforePort] = await once(child, 'message');
+    assert.throws(() => createWebhookServer({ secret, databasePath, processJob() {} }), /locked/i);
+    const started = once(child, 'message');
+    assert.equal(await send(beforePort, 'in-flight', payload), 202);
+    const [startedSha] = await started;
+    assert.equal(startedSha, sha);
+    assert.equal(await send(beforePort, 'waiting', queuedPayload), 202);
+    assert.equal(await send(beforePort, 'waiting', queuedPayload), 202);
+    const exit = once(child, 'exit');
+    child.kill('SIGKILL');
+    await exit;
+
+    let drained;
+    const resumed = new Promise(resolve => { drained = resolve; });
+    server = createWebhookServer({ secret, databasePath, processJob(job) {
+      processed.push(job.sha);
+      if (job.sha === secondSha) drained();
+    } });
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    await resumed;
+    assert.deepEqual(processed, [sha, secondSha]);
+    await new Promise(resolve => server.close(resolve));
+
+    // Reopen the completed deliveries. A new event acts as a barrier, so
+    // the assertion does not depend on sleeping for the worker to run.
+    let finish;
+    const barrier = new Promise(resolve => { finish = resolve; });
+    server = createWebhookServer({ secret, databasePath, processJob(job) {
+      processed.push(job.sha);
+      if (job.sha === treeSha) finish();
+    } });
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const afterPort = server.address().port;
+    assert.equal(await send(afterPort, 'in-flight', payload), 202);
+    assert.equal(await send(afterPort, 'waiting', queuedPayload), 202);
+    const newPayload = structuredClone(payload);
+    newPayload.pull_request.head.sha = treeSha;
+    assert.equal(await send(afterPort, 'new-event', newPayload), 202);
+    await barrier;
+    assert.deepEqual(processed, [sha, secondSha, treeSha]);
+  });
 
 function githubMock({ treeOverride, existing = [], comparison = [], skillContents = skill } = {}) {
   const writes = [];

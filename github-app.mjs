@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { formatReport, scan } from './preflight.mjs';
+import { openWebhookQueue } from './webhook-queue.mjs';
 
 const shaPattern = /^[a-f0-9]{40}$/;
 const checkName = 'ST-LAPS Skill Preflight';
@@ -15,7 +16,7 @@ const maxSkills = 300;
 const maxSkillBytes = 1024 * 1024;
 const maxTotalSkillBytes = 16 * maxSkillBytes;
 const maxWebhookBytes = 1024 * 1024;
-const maxPendingJobs = 20;
+const retryDelayMs = 30000;
 const compareFileLimit = 300;
 const annotationLimit = 50;
 
@@ -202,11 +203,49 @@ export function createProcessor({ appId, privateKey, fetchImpl, log = console.er
   };
 }
 
-export function createWebhookServer({ secret, processJob, log = console.error }) {
+export function createWebhookServer({ secret, processJob, databasePath = ':memory:', log = console.error }) {
   if (!secret) throw new Error('A webhook secret is required');
-  const pending = new Set();
-  let queue = Promise.resolve();
-  return createServer(async (request, response) => {
+  const queue = openWebhookQueue(databasePath);
+  let timer;
+  let active = false;
+  let stopped = false;
+
+  function schedule(delay = 0) {
+    if (stopped || active) return;
+    clearTimeout(timer);
+    timer = setTimeout(drain, delay).unref();
+  }
+
+  async function drain() {
+    active = true;
+    let delay;
+    try {
+      while (!stopped) {
+        const delivery = queue.next();
+        if (!delivery) break;
+        delay = delivery.available_at - Date.now();
+        if (delay > 0) break;
+        delay = undefined;
+        try {
+          await processJob(JSON.parse(delivery.job));
+        } catch (error) {
+          log('Skill Preflight job failed and will retry:', error.message);
+          queue.retry(delivery.id, Date.now() + retryDelayMs);
+          continue;
+        }
+        queue.complete(delivery.id, Date.now());
+      }
+    } catch (error) {
+      log('Skill Preflight queue worker failed:', error.message);
+      delay = retryDelayMs;
+    } finally {
+      active = false;
+      if (stopped) queue.close();
+      else if (delay !== undefined) schedule(delay);
+    }
+  }
+
+  const server = createServer(async (request, response) => {
     if (request.method !== 'POST' || request.url !== '/github/webhook') {
       response.writeHead(404).end();
       return;
@@ -232,28 +271,48 @@ export function createWebhookServer({ secret, processJob, log = console.error })
       catch { response.writeHead(400).end(); return; }
       const job = pullRequestJob(request.headers['x-github-event'], payload);
       if (!job) { response.writeHead(204).end(); return; }
-      const key = job.installationId + ':' + job.repositoryId + ':' + job.baseSha + ':' + job.sha;
-      if (pending.has(key)) { response.writeHead(202).end(); return; }
-      if (pending.size >= maxPendingJobs) { response.writeHead(503).end(); return; }
-      pending.add(key);
-      queue = queue.then(() => processJob(job)).catch(error => {
-        log('Skill Preflight job failed:', error.message);
-      }).finally(() => pending.delete(key));
+      const deliveryId = request.headers['x-github-delivery'];
+      if (deliveryId !== undefined && !/^[a-zA-Z0-9-]{1,128}$/.test(deliveryId)) {
+        response.writeHead(400).end();
+        return;
+      }
+      const key = deliveryId ?? `job:${job.installationId}:${job.repositoryId}:${job.baseSha}:${job.sha}`;
+      let status;
+      try {
+        status = queue.accept(key, job, Date.now());
+      } catch (error) {
+        log('Skill Preflight could not store the delivery:', error.message);
+        response.writeHead(503).end();
+        return;
+      }
+      if (status === 'full') { response.writeHead(503).end(); return; }
       response.writeHead(202).end();
+      schedule();
     } catch {
       if (!response.headersSent && !response.destroyed) response.writeHead(400).end();
     }
   });
+  server.once('listening', () => schedule());
+  server.once('close', () => {
+    stopped = true;
+    clearTimeout(timer);
+    if (!active) queue.close();
+  });
+  return server;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   const { GITHUB_APP_ID: appId, GITHUB_APP_PRIVATE_KEY: privateKey,
-    GITHUB_WEBHOOK_SECRET: secret, PORT = '3000', HOST = '127.0.0.1' } = process.env;
+    GITHUB_WEBHOOK_SECRET: secret, WEBHOOK_QUEUE_DB: databasePath,
+    PORT = '3000', HOST = '127.0.0.1' } = process.env;
   if (!/^\d+$/.test(appId ?? '') || !privateKey || !secret || !/^\d+$/.test(PORT) || +PORT > 65535) {
     throw new Error('Set GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY, GITHUB_WEBHOOK_SECRET and a valid PORT');
   }
+  if (!databasePath || !path.isAbsolute(databasePath)) {
+    throw new Error('Set WEBHOOK_QUEUE_DB to an absolute path on persistent local storage');
+  }
   const processJob = createProcessor({ appId, privateKey });
-  createWebhookServer({ secret, processJob }).listen(Number(PORT), HOST, () => {
+  createWebhookServer({ secret, processJob, databasePath }).listen(Number(PORT), HOST, () => {
     console.log('Skill Preflight GitHub App webhook is listening.');
   });
 }
